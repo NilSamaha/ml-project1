@@ -2,59 +2,14 @@ from pathlib import Path
 
 import numpy as np
 
-from helpers import create_csv_submission, load_csv_data
+from helpers import (
+    create_csv_submission,
+    find_best_threshold,
+    fit_preprocessor,
+    load_csv_data,
+    transform_features,
+)
 from implementations import ridge_regression
-
-
-def f1_score(y_true, y_pred):
-    tp = np.sum((y_true == 1) & (y_pred == 1))
-    fp = np.sum((y_true == -1) & (y_pred == 1))
-    fn = np.sum((y_true == 1) & (y_pred == -1))
-    return 2 * tp / (2 * tp + fp + fn) if tp > 0 else 0.0
-
-
-def find_best_threshold(y_true, scores):
-    """Find the score threshold that maximizes validation F1."""
-    thresholds = np.quantile(scores, np.linspace(0.50, 0.99, 200))
-    best_threshold = 0.0
-    best_f1 = -1.0
-
-    for threshold in thresholds:
-        predictions = np.where(scores >= threshold, 1, -1)
-        candidate_f1 = f1_score(y_true, predictions)
-
-        if candidate_f1 > best_f1:
-            best_f1 = candidate_f1
-            best_threshold = threshold
-
-    return best_threshold, best_f1
-
-
-def fit_preprocessor(x):
-    """Learn preprocessing values from training data."""
-    medians = np.nanmedian(x, axis=0)
-    medians = np.where(np.isnan(medians), 0, medians)
-
-    missing_columns = np.any(np.isnan(x), axis=0)
-
-    x_filled = np.where(np.isnan(x), medians, x)
-
-    means = np.mean(x_filled, axis=0)
-    standard_deviations = np.std(x_filled, axis=0)
-    standard_deviations[standard_deviations < 1e-12] = 1
-
-    return medians, means, standard_deviations, missing_columns
-
-
-def transform_features(x, medians, means, standard_deviations, missing_columns):
-    """Apply previously learned preprocessing values."""
-    missing_indicators = np.isnan(x[:, missing_columns]).astype(float)
-    x = np.where(np.isnan(x), medians, x)
-    x = (x - means) / standard_deviations
-    x = np.column_stack((x, missing_indicators))
-
-    # Add the bias column.
-    return np.column_stack((np.ones(len(x)), x))
 
 
 def main():
@@ -73,11 +28,17 @@ def main():
     cut = int(0.8 * len(idx))
     tr, va = idx[:cut], idx[cut:]
 
-    medians_val, means_val, stds_val, missing_columns_val = fit_preprocessor(x_train[tr])
+    medians_val, means_val, stds_val, missing_columns_val = fit_preprocessor(
+        x_train[tr]
+    )
 
-    x_tr = transform_features(x_train[tr], medians_val, means_val, stds_val, missing_columns_val)
+    x_tr = transform_features(
+        x_train[tr], medians_val, means_val, stds_val, missing_columns_val
+    )
 
-    x_val = transform_features(x_train[va], medians_val, means_val, stds_val, missing_columns_val)
+    x_val = transform_features(
+        x_train[va], medians_val, means_val, stds_val, missing_columns_val
+    )
 
     # Compare several regularization strengths using the same validation split.
     lambda_values = [0.00001, 0.0001, 0.001, 0.01, 0.1, 1.0]
@@ -91,7 +52,9 @@ def main():
     for lambda_ in lambda_values:
         candidate_weights, _ = ridge_regression(y_train[tr], x_tr, lambda_=lambda_)
         candidate_scores = x_val @ candidate_weights
-        candidate_threshold, candidate_f1 = find_best_threshold(y_train[va], candidate_scores)
+        candidate_threshold, candidate_f1 = find_best_threshold(
+            y_train[va], candidate_scores
+        )
         candidate_predictions = np.where(candidate_scores >= candidate_threshold, 1, -1)
         candidate_accuracy = np.mean(candidate_predictions == y_train[va])
 
@@ -134,10 +97,16 @@ def main():
     # Release validation arrays before processing the complete dataset.
     del x_tr, x_val, scores_val
 
-    medians_final, means_final, stds_final, missing_columns_final = fit_preprocessor(x_train)
+    medians_final, means_final, stds_final, missing_columns_final = fit_preprocessor(
+        x_train
+    )
 
-    x_train_final = transform_features(x_train, medians_final, means_final, stds_final, missing_columns_final)
-    x_test_final = transform_features(x_test, medians_final, means_final, stds_final, missing_columns_final)
+    x_train_final = transform_features(
+        x_train, medians_final, means_final, stds_final, missing_columns_final
+    )
+    x_test_final = transform_features(
+        x_test, medians_final, means_final, stds_final, missing_columns_final
+    )
 
     # Train a basic ridge-regression model.
     weights, loss = ridge_regression(y_train, x_train_final, lambda_=best_lambda)

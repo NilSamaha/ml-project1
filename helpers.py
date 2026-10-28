@@ -5,6 +5,54 @@ import numpy as np
 import os
 
 
+def f1_score(y_true, y_pred):
+    """Compute the F1 score for labels encoded as {-1, 1}."""
+    tp = np.sum((y_true == 1) & (y_pred == 1))
+    fp = np.sum((y_true == -1) & (y_pred == 1))
+    fn = np.sum((y_true == 1) & (y_pred == -1))
+    return 2 * tp / (2 * tp + fp + fn) if tp > 0 else 0.0
+
+
+def find_best_threshold(y_true, scores):
+    """Find the score threshold that maximizes validation F1."""
+    thresholds = np.quantile(scores, np.linspace(0.50, 0.99, 200))
+    best_threshold = 0.0
+    best_f1 = -1.0
+
+    for threshold in thresholds:
+        predictions = np.where(scores >= threshold, 1, -1)
+        candidate_f1 = f1_score(y_true, predictions)
+
+        if candidate_f1 > best_f1:
+            best_f1 = candidate_f1
+            best_threshold = threshold
+
+    return best_threshold, best_f1
+
+
+def fit_preprocessor(x):
+    """Learn imputation, scaling, and missing-indicator values."""
+    medians = np.nanmedian(x, axis=0)
+    medians = np.where(np.isnan(medians), 0, medians)
+    missing_columns = np.any(np.isnan(x), axis=0)
+
+    x_filled = np.where(np.isnan(x), medians, x)
+    means = np.mean(x_filled, axis=0)
+    standard_deviations = np.std(x_filled, axis=0)
+    standard_deviations[standard_deviations < 1e-12] = 1
+
+    return medians, means, standard_deviations, missing_columns
+
+
+def transform_features(x, medians, means, standard_deviations, missing_columns):
+    """Apply fitted preprocessing and add missing indicators and a bias."""
+    missing_indicators = np.isnan(x[:, missing_columns]).astype(float)
+    x = np.where(np.isnan(x), medians, x)
+    x = (x - means) / standard_deviations
+    x = np.column_stack((x, missing_indicators))
+    return np.column_stack((np.ones(len(x)), x))
+
+
 def load_csv_data(data_path, sub_sample=False):
     """
     This function loads the data and returns the respectinve numpy arrays.
