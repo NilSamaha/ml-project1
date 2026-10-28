@@ -13,6 +13,23 @@ def f1_score(y_true, y_pred):
     return 2 * tp / (2 * tp + fp + fn) if tp > 0 else 0.0
 
 
+def find_best_threshold(y_true, scores):
+    """Find the score threshold that maximizes validation F1."""
+    thresholds = np.quantile(scores, np.linspace(0.50, 0.99, 200))
+    best_threshold = 0.0
+    best_f1 = -1.0
+
+    for threshold in thresholds:
+        predictions = np.where(scores >= threshold, 1, -1)
+        candidate_f1 = f1_score(y_true, predictions)
+
+        if candidate_f1 > best_f1:
+            best_f1 = candidate_f1
+            best_threshold = threshold
+
+    return best_threshold, best_f1
+
+
 def fit_preprocessor(x):
     """Learn preprocessing values from training data."""
     medians = np.nanmedian(x, axis=0)
@@ -22,7 +39,7 @@ def fit_preprocessor(x):
 
     means = np.mean(x_filled, axis=0)
     standard_deviations = np.std(x_filled, axis=0)
-    standard_deviations[standard_deviations == 0] = 1
+    standard_deviations[standard_deviations < 1e-12] = 1
 
     return medians, means, standard_deviations
 
@@ -58,31 +75,39 @@ def main():
 
     x_val = transform_features(x_train[va], medians_val, means_val, stds_val)
 
-    w_val, _ = ridge_regression(y_train[tr], x_tr, lambda_=0.001)
-    scores_val = x_val @ w_val
-
-    best_threshold = 0.0
+    # Compare several regularization strengths using the same validation split.
+    lambda_values = [0.00001, 0.0001, 0.001, 0.01, 0.1, 1.0]
+    best_lambda = None
+    best_threshold = None
     best_f1 = -1.0
+    best_accuracy = 0.0
+    scores_val = None
 
-    # Try thresholds corresponding to different proportions
-    # of positive predictions.
-    thresholds = np.quantile(
-        scores_val,
-        np.linspace(0.50, 0.99, 200),
-    )
+    print("\nLambda search:")
+    for lambda_ in lambda_values:
+        candidate_weights, _ = ridge_regression(y_train[tr], x_tr, lambda_=lambda_)
+        candidate_scores = x_val @ candidate_weights
+        candidate_threshold, candidate_f1 = find_best_threshold(y_train[va], candidate_scores)
+        candidate_predictions = np.where(candidate_scores >= candidate_threshold, 1, -1)
+        candidate_accuracy = np.mean(candidate_predictions == y_train[va])
 
-    for threshold in thresholds:
-        candidate_predictions = np.where(scores_val >= threshold, 1, -1)
-        candidate_f1 = f1_score(y_train[va], candidate_predictions)
+        print(
+            f"lambda={lambda_:g}, threshold={candidate_threshold:.6f}, "
+            f"accuracy={candidate_accuracy:.6f}, F1={candidate_f1:.6f}"
+        )
 
         if candidate_f1 > best_f1:
+            best_lambda = lambda_
+            best_threshold = candidate_threshold
             best_f1 = candidate_f1
-            best_threshold = threshold
+            best_accuracy = candidate_accuracy
+            scores_val = candidate_scores
 
     pred_val = np.where(scores_val >= best_threshold, 1, -1)
 
+    print("\nSelected lambda:", best_lambda)
     print("Best threshold:", best_threshold)
-    print("Val accuracy:", np.mean(pred_val == y_train[va]))
+    print("Val accuracy:", best_accuracy)
     print("Val F1:", best_f1)
 
     y_val = y_train[va]
@@ -101,13 +126,17 @@ def main():
     print("False negatives:", fn)
     print("Precision:", precision)
     print("Recall:", recall)
+
+    # Release validation arrays before processing the complete dataset.
+    del x_tr, x_val, scores_val
+
     medians_final, means_final, stds_final = fit_preprocessor(x_train)
 
     x_train_final = transform_features(x_train, medians_final, means_final, stds_final)
     x_test_final = transform_features(x_test, medians_final, means_final, stds_final)
 
     # Train a basic ridge-regression model.
-    weights, loss = ridge_regression(y_train, x_train_final, lambda_=0.001)
+    weights, loss = ridge_regression(y_train, x_train_final, lambda_=best_lambda)
 
     print("Training loss:", loss)
 
