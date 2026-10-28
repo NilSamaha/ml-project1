@@ -35,19 +35,23 @@ def fit_preprocessor(x):
     medians = np.nanmedian(x, axis=0)
     medians = np.where(np.isnan(medians), 0, medians)
 
+    missing_columns = np.any(np.isnan(x), axis=0)
+
     x_filled = np.where(np.isnan(x), medians, x)
 
     means = np.mean(x_filled, axis=0)
     standard_deviations = np.std(x_filled, axis=0)
     standard_deviations[standard_deviations < 1e-12] = 1
 
-    return medians, means, standard_deviations
+    return medians, means, standard_deviations, missing_columns
 
 
-def transform_features(x, medians, means, standard_deviations):
+def transform_features(x, medians, means, standard_deviations, missing_columns):
     """Apply previously learned preprocessing values."""
+    missing_indicators = np.isnan(x[:, missing_columns]).astype(float)
     x = np.where(np.isnan(x), medians, x)
     x = (x - means) / standard_deviations
+    x = np.column_stack((x, missing_indicators))
 
     # Add the bias column.
     return np.column_stack((np.ones(len(x)), x))
@@ -69,11 +73,11 @@ def main():
     cut = int(0.8 * len(idx))
     tr, va = idx[:cut], idx[cut:]
 
-    medians_val, means_val, stds_val = fit_preprocessor(x_train[tr])
+    medians_val, means_val, stds_val, missing_columns_val = fit_preprocessor(x_train[tr])
 
-    x_tr = transform_features(x_train[tr], medians_val, means_val, stds_val)
+    x_tr = transform_features(x_train[tr], medians_val, means_val, stds_val, missing_columns_val)
 
-    x_val = transform_features(x_train[va], medians_val, means_val, stds_val)
+    x_val = transform_features(x_train[va], medians_val, means_val, stds_val, missing_columns_val)
 
     # Compare several regularization strengths using the same validation split.
     lambda_values = [0.00001, 0.0001, 0.001, 0.01, 0.1, 1.0]
@@ -130,10 +134,10 @@ def main():
     # Release validation arrays before processing the complete dataset.
     del x_tr, x_val, scores_val
 
-    medians_final, means_final, stds_final = fit_preprocessor(x_train)
+    medians_final, means_final, stds_final, missing_columns_final = fit_preprocessor(x_train)
 
-    x_train_final = transform_features(x_train, medians_final, means_final, stds_final)
-    x_test_final = transform_features(x_test, medians_final, means_final, stds_final)
+    x_train_final = transform_features(x_train, medians_final, means_final, stds_final, missing_columns_final)
+    x_test_final = transform_features(x_test, medians_final, means_final, stds_final, missing_columns_final)
 
     # Train a basic ridge-regression model.
     weights, loss = ridge_regression(y_train, x_train_final, lambda_=best_lambda)
